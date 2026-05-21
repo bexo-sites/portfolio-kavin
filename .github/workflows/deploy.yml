@@ -1,0 +1,38 @@
+name: Build and sync portfolio to GCS
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve profile ID
+        id: profile
+        run: |
+          PID="${{ vars.PROFILE_ID }}"
+          if [ -z "$PID" ]; then
+            PID=$(grep -m1 'Profile ID:' README.md | sed 's/.*`\([^`]*\)`.*/\1/')
+          fi
+          echo "id=$PID" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_ASSET_PREFIX: https://storage.googleapis.com/bexo-sites-public/${{ steps.profile.outputs.id }}/site
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCS_SA_KEY }}'
+      - name: Upload static export
+        run: |
+          gcloud storage rsync -r ./out "gs://bexo-sites-public/${{ steps.profile.outputs.id }}/site" \
+            --delete-unmatched-destination-objects
+      - name: Purge Cloudflare cache
+        run: |
+          curl -sS -X POST "https://api.cloudflare.com/client/v4/zones/${{ secrets.CF_ZONE_ID }}/purge_cache" \
+            -H "Authorization: Bearer ${{ secrets.CF_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}'
